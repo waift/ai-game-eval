@@ -1,0 +1,6 @@
+[
+  {"id":"case1","name":"吃碰杠胡了","type":"gameGen","difficulty":"简单","prompt":"生成一个麻将游戏，支持吃、碰、杠、胡等基本操作，AI对手难度适中。"},
+  {"id":"case2","name":"俄罗斯方块","type":"gameGen","difficulty":"中等","prompt":"生成一个俄罗斯方块游戏，支持经典模式，随着等级提高速度加快。"},
+  {"id":"case3","name":"飞机大战","type":"gameGen","difficulty":"困难","prompt":"生成一个飞机大战游戏，玩家控制飞机射击敌机，有多款战机可选。"},
+  {"id":"mr_case1","name":"多轮水果三消","type":"multiRound","originalPrompt":"做个水果三消游戏，8x8的格子，消除三个相同水果得分。","rounds":[{"roundIdx":1,"prompt":"加特殊道具，炸弹可以炸掉周围3x3区域的水果"},{"roundIdx":2,"prompt":"增加关卡系统，每关目标不同"},{"roundIdx":3,"prompt":"加入音效和背景音乐"}]}
+]
