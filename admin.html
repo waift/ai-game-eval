@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>评测管理后台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .nav-item { display:block; padding:10px 16px; cursor:pointer; font-size:13px; border-left:3px solid transparent; transition:all 0.15s; }
+    .nav-item:hover { background:#f1f5f9; }
+    .nav-item.active { background:#eff6ff; border-left-color:#2563eb; color:#2563eb; font-weight:600; }
+    .tag-btn { display:inline-block; padding:5px 14px; border-radius:999px; border:1px solid #d1d5db; font-size:12px; cursor:pointer; transition:all 0.15s; user-select:none; background:white; color:#374151; }
+    .tag-btn.selected { background:#2563eb; color:white; border-color:#2563eb; }
+    .tag-btn:hover:not(.selected) { background:#eff6ff; border-color:#93c5fd; }
+    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; z-index:9999; }
+    .modal-box { background:white; border-radius:12px; padding:28px; max-width:560px; width:92%; max-height:88vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.25); }
+    .round-input-group { border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; margin-bottom:8px; background:#fafbfc; }
+    ::-webkit-scrollbar { width:5px; }
+    ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
+    .toast-enter { animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from{opacity:0; transform:translateY(-10px);} to{opacity:1; transform:translateY(0);} }
+    .tip-bar { position:fixed; top:0; left:0; right:0; z-index:9998;
+      padding:10px 20px; text-align:center; font-size:13px; font-weight:500;
+      color:white; transform:translateY(-100%); transition:transform 0.3s; }
+    .tip-bar.show { transform:translateY(0); }
+    .tip-bar.success { background:#16a34a; }
+    .tip-bar.error { background:#dc2626; }
+    .tip-bar.info { background:#2563eb; }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex">
+
+  <!-- 左侧导航栏 -->
+  <aside class="w-48 bg-white border-r flex-shrink-0 min-h-screen" style="position:sticky; top:0;">
+    <div class="p-4 border-b">
+      <h1 class="text-sm font-bold text-gray-800 leading-tight">评测管理后台</h1>
+      <div class="text-xs text-gray-400 mt-1" id="syncStatus">⚪ 未同步</div>
+    </div>
+    <nav class="py-2">
+      <div class="text-xs font-semibold text-gray-400 px-4 py-2 uppercase tracking-wider">配置管理</div>
+      <div class="nav-item active" onclick="switchNav('platform')" id="nav-platform">平台管理</div>
+      <div class="nav-item" onclick="switchNav('task')" id="nav-task">题目管理</div>
+      <div class="nav-item" onclick="switchNav('standard')" id="nav-standard">标准管理</div>
+      <div class="nav-item" onclick="switchNav('assign')" id="nav-assign">评测员分配</div>
+      <div class="text-xs font-semibold text-gray-400 px-4 py-2 mt-2 uppercase tracking-wider">数据</div>
+      <div class="nav-item" onclick="switchNav('data')" id="nav-data">数据管理</div>
+    </nav>
+  </aside>
+
+  <!-- 右侧内容区 -->
+  <main class="flex-1 p-6 overflow-y-auto" id="mainContent"></main>
+
+  <script>
+    // ══════════════════════════════════════
+    // GitHub API 配置
+    // ══════════════════════════════════════
+    const GITHUB_CONFIG = {
+      token: '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',
+      owner: 'waift',
+      repo: 'ai-game-eval',
+      branch: 'main',
+      files: {
+        platforms: 'data/config/platforms.json',
+        tasks: 'data/config/tasks.json',
+        standards: 'data/config/standards.json',
+        evaluators: 'data/config/evaluators.json'
+      }
+    };
+
+    // GitHub API 封装
+    const GitHubAPI = {
+      async request(path, options = {}) {
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${encodeURIComponent(path)}`;
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json',
+            ...options.headers
+          }
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(`GitHub API ${res.status}: ${err.message || res.statusText}`);
+        }
+        return res.json();
+      },
+
+      async readFile(path) {
+        try {
+          const data = await this.request(path);
+          const content = atob(data.content.replace(/\n/g, ''));
+          return { content: JSON.parse(content), sha: data.sha };
+        } catch(e) {
+          if (e.message.includes('404')) return null;
+          throw e;
+        }
+      },
+
+      async writeFile(path, content, sha) {
+        const body = {
+          message: `Update ${path}`,
+          content: btoa(unescape(encodeURIComponent(JSON.stringify(content, null, 2)))),
+          branch: GITHUB_CONFIG.branch
+        };
+        if (sha) body.sha = sha;
+        return await this.request(path, { method: 'PUT', body: JSON.stringify(body) });
+      }
+    };
+
+    // ══════════════════════════════════════
+    // 数据存储（优先 GitHub，降级 localStorage）
+    // ══════════════════════════════════════
+    let githubAvailable = true;
+
+    function setSyncStatus(status, text) {
+      const el = document.getElementById('syncStatus');
+      if (el) { el.textContent = text; el.style.color = status === 'ok' ? '#16a34a' : status === 'error' ? '#dc2626' : '#6b7280'; }
+    }
+
+    async function loadFromGitHub(key) {
+      const path = GITHUB_CONFIG.files[key];
+      if (!path) return null;
+      const result = await GitHubAPI.readFile(path);
+      return result ? result.content : null;
+    }
+
+    async function saveToGitHub(key, val) {
+      const path = GITHUB_CONFIG.files[key];
+      if (!path) return;
+      const existing = await GitHubAPI.readFile(path);
+      const sha = existing ? existing.sha : null;
+      await GitHubAPI.writeFile(path, val, sha);
+    }
+
+    function getData(key, defaultVal) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return defaultVal !== undefined ? defaultVal : [];
+        return JSON.parse(raw);
+      } catch(e) { return defaultVal !== undefined ? defaultVal : []; }
+    }
+
+    function setData(key, val) {
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) { console.error('Storage error', e); }
+    }
+
+    async function loadData(key, defaultVal) {
+      if (!githubAvailable) return getData(key, defaultVal);
+      try {
+        const data = await loadFromGitHub(key);
+        if (data !== null) {
+          setData(key, data);
+          setSyncStatus('ok', '🟢 GitHub 已同步');
+          return data;
+        }
+      } catch(e) {
+        console.warn('GitHub read failed, using localStorage', e);
+        githubAvailable = false;
+        setSyncStatus('error', '🔴 使用本地数据');
+      }
+      return getData(key, defaultVal);
+    }
+
+    async function saveData(key, val) {
+      setData(key, val);
+      if (!githubAvailable) return;
+      try {
+        await saveToGitHub(key, val);
+        setSyncStatus('ok', '🟢 GitHub 已同步');
+        showToast('已同步到 GitHub', 'success');
+      } catch(e) {
+        console.warn('GitHub write failed', e);
+        setSyncStatus('error', '🟡 已保存本地');
+        showToast('已保存到本地，GitHub 同步失败', 'error');
+      }
+    }
+
+    // ══════════════════════════════════════
+    // 自定义弹窗
+    // ══════════════════════════════════════
+    window.__confirmCallbacks = {};
+
+    function showToast(msg, type) {
+      var colors = { success:'#16a34a', error:'#dc2626', info:'#2563eb' };
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay toast-enter';
+      overlay.innerHTML = '<div class="modal-box text-center" style="max-width:400px;">' +
+        '<p style="font-size:14px;color:' + (colors[type]||colors.info) + ';margin-bottom:18px;line-height:1.6;">' + escapeHtml(msg).replace(/\n/g,'<br>') + '</p>' +
+        '<button onclick="this.closest(\'.modal-overlay\').remove()" class="px-6 py-2 bg-gray-800 text-white rounded-lg text-sm hover:bg-gray-700 transition">确定</button>' +
+        '</div>';
+      overlay.addEventListener('click', function(e) { if(e.target===overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+    }
+
+    function showConfirm(msg, onOk) {
+      var id = 'cb_' + Date.now();
+      window.__confirmCallbacks[id] = onOk;
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay toast-enter';
+      overlay.innerHTML = '<div class="modal-box text-center" style="max-width:420px;">' +
+        '<p style="font-size:14px;color:#374151;margin-bottom:20px;line-height:1.6;">' + escapeHtml(msg).replace(/\n/g,'<br>') + '</p>' +
+        '<div class="flex justify-center gap-3">' +
+          '<button onclick="this.closest(\'.modal-overlay\').remove()" class="px-5 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 transition">取消</button>' +
+          '<button onclick="confirmOk(\'' + id + '\')" class="px-5 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition">确定删除</button>' +
+        '</div></div>';
+      overlay.addEventListener('click', function(e) { if(e.target===overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+    }
+
+    function confirmOk(id) {
+      var overlay = document.querySelector('.modal-overlay');
+      if (overlay) overlay.remove();
+      if (window.__confirmCallbacks[id]) {
+        window.__confirmCallbacks[id]();
+        delete window.__confirmCallbacks[id];
+      }
+    }
+
+    // ══════════════════════════════════════
+    // 默认数据
+    // ══════════════════════════════════════
+    const DEFAULT_PLATFORMS = ["元宝", "文心", "通义"];
+    const DEFAULT_TASKS = [
+      { id:"case1", name:"吃碰杠胡了", type:"gameGen", difficulty:"简单", prompt:"生成一个麻将游戏，支持吃、碰、杠、胡等基本操作，AI对手难度适中。" },
+      { id:"case2", name:"俄罗斯方块", type:"gameGen", difficulty:"中等", prompt:"生成一个俄罗斯方块游戏，支持经典模式，随着等级提高速度加快。" },
+      { id:"case3", name:"飞机大战", type:"gameGen", difficulty:"困难", prompt:"生成一个飞机大战游戏，玩家控制飞机射击敌机，有多款战机可选。" },
+      { id:"mr_case1", name:"多轮水果三消", type:"multiRound",
+        originalPrompt:"做个水果三消游戏，8x8的格子，消除三个相同水果得分。",
+        rounds:[ {roundIdx:1,prompt:"加特殊道具，炸弹可以炸掉周围3x3区域的水果"}, {roundIdx:2,prompt:"增加关卡系统，每关目标不同"}, {roundIdx:3,prompt:"加入音效和背景音乐"} ]
+      }
+    ];
+    const DEFAULT_STANDARDS = {
+      gameGen: [
+        { name:"功能稳定性", scores:[{score:0,desc:"无法运行"},{score:1,desc:"有较多Bug"},{score:2,desc:"有少量Bug"},{score:3,desc:"运行稳定"}] },
+        { name:"视觉品质", scores:[{score:0,desc:"画面严重异常"},{score:1,desc:"画面有明显瑕疵"},{score:2,desc:"画面尚可"},{score:3,desc:"画面精美"}] },
+        { name:"音效品质", scores:[{score:0,desc:"无音效"},{score:1,desc:"音效质量较差"},{score:2,desc:"音效尚可"},{score:3,desc:"音效优秀"}] },
+        { name:"指令还原度", scores:[{score:0,desc:"完全不符"},{score:1,desc:"部分还原"},{score:2,desc:"基本还原"},{score:3,desc:"高度还原"}] },
+        { name:"玩法设计", scores:[{score:0,desc:"玩法缺失"},{score:1,desc:"玩法简单"},{score:2,desc:"玩法尚可"},{score:3,desc:"玩法有趣"}] },
+        { name:"主观评价", scores:[{score:0,desc:"体验很差"},{score:1,desc:"体验一般"},{score:2,desc:"体验尚可"},{score:3,desc:"超出预期"}] }
+      ],
+      multiRound: [
+        { name:"功能稳定性", scores:[{score:0,desc:"修改后无法运行"},{score:1,desc:"修改后Bug增多"},{score:2,desc:"修改后基本稳定"},{score:3,desc:"修改后运行稳定"}] },
+        { name:"视觉品质", scores:[{score:0,desc:"修改后画面变差"},{score:1,desc:"无明显改善"},{score:2,desc:"有所改善"},{score:3,desc:"显著改善"}] },
+        { name:"音效品质", scores:[{score:0,desc:"修改后音效变差"},{score:1,desc:"无明显改善"},{score:2,desc:"有所改善"},{score:3,desc:"显著改善"}] },
+        { name:"指令还原度", scores:[{score:0,desc:"完全不符合新指令"},{score:1,desc:"部分符合"},{score:2,desc:"基本符合"},{score:3,desc:"完全符合"}] },
+        { name:"玩法设计", scores:[{score:0,desc:"修改后玩法变差"},{score:1,desc:"无明显改善"},{score:2,desc:"有所改善"},{score:3,desc:"显著改善"}] },
+        { name:"主观评价", scores:[{score:0,desc:"修改效果很差"},{score:1,desc:"效果一般"},{score:2,desc:"效果尚可"},{score:3,desc:"效果很好"}] }
+      ]
+    };
+    const DEFAULT_EVALUATORS = [
+      { id:"eval_01", name:"pengchengluo", taskIds:["case1","case2","mr_case1"], platforms:["元宝","文心","通义"] },
+      { id:"eval_02", name:"evaluator02", taskIds:["case1","case3","mr_case1"], platforms:["元宝","文心","通义"] },
+      { id:"eval_03", name:"evaluator03", taskIds:["case2","case3","mr_case1"], platforms:["元宝","文心","通义"] }
+    ];
+
+    async function initData() {
+      if (!localStorage.getItem('config_platforms')) setData('config_platforms', DEFAULT_PLATFORMS);
+      if (!localStorage.getItem('config_tasks')) setData('config_tasks', DEFAULT_TASKS);
+      if (!localStorage.getItem('config_standards')) setData('config_standards', DEFAULT_STANDARDS);
+      if (!localStorage.getItem('config_evaluators')) setData('config_evaluators', DEFAULT_EVALUATORS);
+      // 尝试从 GitHub 加载最新数据
+      await loadData('config_platforms', DEFAULT_PLATFORMS);
+      await loadData('config_tasks', DEFAULT_TASKS);
+      await loadData('config_standards', DEFAULT_STANDARDS);
+      await loadData('config_evaluators', DEFAULT_EVALUATORS);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ══════════════════════════════════════
+    // 导航切换
+    // ══════════════════════════════════════
+    let currentNav = 'platform';
+
+    function switchNav(nav) {
+      currentNav = nav;
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      const navEl = document.getElementById('nav-' + nav);
+      if (navEl) navEl.classList.add('active');
+      renderContent();
+    }
+
+    function renderContent() {
+      const container = document.getElementById('mainContent');
+      switch(currentNav) {
+        case 'platform': container.innerHTML = renderPlatform(); break;
+        case 'task': container.innerHTML = renderTask(); break;
+        case 'standard': container.innerHTML = renderStandard(); break;
+        case 'assign': container.innerHTML = renderAssign(); break;
+        case 'data': container.innerHTML = renderData(); break;
+      }
+    }
+
+    // ══════════════════════════════════════
+    // 平台管理
+    // ══════════════════════════════════════
+    function renderPlatform() {
+      const platforms = getData('config_platforms');
+      return `<div>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-gray-800">平台管理</h2>
+          <button onclick="addPlatform()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition">+ 新增平台</button>
+        </div>
+        <div class="bg-white rounded-xl shadow p-5">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500 border-b"><th class="py-2">名称</th><th class="py-2 w-24">操作</th></tr></thead>
+            <tbody>
+              ${platforms.map((p,i) => `<tr class="border-b hover:bg-gray-50"><td class="py-2">${escapeHtml(p)}</td><td class="py-2"><button onclick="deletePlatform(${i})" class="text-red-600 hover:underline text-xs">删除</button></td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }
+
+    function addPlatform() {
+      const name = prompt('请输入平台名称：');
+      if (!name) return;
+      const platforms = getData('config_platforms');
+      if (platforms.includes(name)) { showToast('平台已存在', 'error'); return; }
+      platforms.push(name);
+      saveData('config_platforms', platforms);
+      renderContent();
+    }
+
+    function deletePlatform(i) {
+      showConfirm('确定删除该平台？', async () => {
+        const platforms = getData('config_platforms');
+        platforms.splice(i, 1);
+        await saveData('config_platforms', platforms);
+        renderContent();
+      });
+    }
+
+    // ══════════════════════════════════════
+    // 题目管理
+    // ══════════════════════════════════════
+    function renderTask() {
+      const tasks = getData('config_tasks');
+      return `<div>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-gray-800">题目管理</h2>
+          <button onclick="addTask()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition">+ 新增题目</button>
+        </div>
+        <div class="space-y-3">
+          ${tasks.map((t,i) => `<div class="bg-white rounded-xl shadow p-4">
+            <div class="flex items-start justify-between">
+              <div class="flex-1">
+                <div class="font-semibold text-gray-800">${escapeHtml(t.name)} <span class="text-xs px-2 py-0.5 rounded ${t.type==='multiRound'?'bg-purple-100 text-purple-700':'bg-blue-100 text-blue-700'}">${t.type==='multiRound'?'多轮修改':'一次性生成'}</span></div>
+                <div class="text-xs text-gray-500 mt-1">ID: ${t.id} | 难度: ${t.difficulty}</div>
+                <div class="text-xs text-gray-600 mt-2 bg-gray-50 p-2 rounded">${escapeHtml(t.prompt)}</div>
+                ${t.type==='multiRound' ? `<div class="mt-2 text-xs text-gray-500">多轮指令：${t.rounds.map(r=>`Round ${r.roundIdx}: ${escapeHtml(r.prompt)}`).join(' → ')}</div>` : ''}
+              </div>
+              <button onclick="deleteTask(${i})" class="text-red-600 hover:underline text-xs ml-4">删除</button>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>`;
+    }
+
+    function addTask() {
+      const id = 'case' + Date.now();
+      const name = prompt('题目名称：');
+      if (!name) return;
+      const type = confirm('是否为多轮修改题型？\n（确定=多轮修改，取消=一次性生成）') ? 'multiRound' : 'gameGen';
+      const difficulty = prompt('难度（简单/中等/困难）：', '中等') || '中等';
+      const promptText = prompt('Prompt：');
+      if (!promptText) return;
+
+      const task = { id, name, type, difficulty, prompt: promptText };
+      if (type === 'multiRound') {
+        const originalPrompt = prompt('初始Prompt：', promptText) || promptText;
+        const roundsStr = prompt('多轮指令（用 | 分隔）：', 'Round 1 指令|Round 2 指令');
+        const rounds = roundsStr ? roundsStr.split('|').map((p,i) => ({ roundIdx: i+1, prompt: p.trim() })) : [];
+        task.originalPrompt = originalPrompt;
+        task.rounds = rounds;
+      }
+
+      const tasks = getData('config_tasks');
+      tasks.push(task);
+      saveData('config_tasks', tasks);
+      renderContent();
+    }
+
+    function deleteTask(i) {
+      showConfirm('确定删除该题？', async () => {
+        const tasks = getData('config_tasks');
+        tasks.splice(i, 1);
+        await saveData('config_tasks', tasks);
+        renderContent();
+      });
+    }
+
+    // ══════════════════════════════════════
+    // 标准管理
+    // ══════════════════════════════════════
+    let stdTab = 'gameGen';
+
+    function renderStandard() {
+      return `<div>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-gray-800">评测标准管理</h2>
+          <div class="flex gap-2">
+            <button onclick="addDimension('${stdTab}')" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition">+ 新增维度</button>
+            <button onclick="saveStandards()" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition">保存标准</button>
+          </div>
+        </div>
+        <div class="flex gap-2 mb-4">
+          <button onclick="switchStdTab('gameGen')" class="tag-btn ${stdTab==='gameGen'?'selected':''}">一次性生成</button>
+          <button onclick="switchStdTab('multiRound')" class="tag-btn ${stdTab==='multiRound'?'selected':''}">多轮修改</button>
+        </div>
+        <div class="bg-white rounded-xl shadow p-5" id="stdEditor"></div>
+      </div>` + (() => { renderStdEditor(); return ''; })();
+    }
+
+    function switchStdTab(tab) {
+      stdTab = tab;
+      document.querySelectorAll('.tag-btn').forEach(b => b.classList.remove('selected'));
+      event.target.classList.add('selected');
+      renderStdEditor();
+    }
+
+    function renderStdEditor() {
+      const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+      const dims = standards[stdTab] || [];
+      const editor = document.getElementById('stdEditor');
+      if (!editor) return;
+      editor.innerHTML = `<div class="space-y-3">
+        ${dims.map((d,i) => `<div class="border rounded-lg p-4 bg-gray-50">
+          <div class="flex items-center justify-between mb-2">
+            <input value="${escapeHtml(d.name)}" onchange="updateDimName('${stdTab}',${i},this.value)" class="font-semibold text-gray-800 bg-transparent border-b border-dashed border-gray-300 focus:outline-none focus:border-blue-500" />
+            <button onclick="deleteDimension('${stdTab}',${i})" class="text-red-600 hover:underline text-xs">删除</button>
+          </div>
+          <div class="space-y-2">
+            ${d.scores.map((s,si) => `<div class="flex items-center gap-2">
+              <span class="inline-block w-6 text-center text-white text-xs rounded-full ${s.score>=2?'bg-green-500':'bg-red-500'}">${s.score}</span>
+              <input value="${escapeHtml(s.desc)}" onchange="updateScoreDesc('${stdTab}',${i},${si},this.value)" class="flex-1 text-xs bg-white border rounded px-2 py-1 focus:outline-none focus:border-blue-500" />
+            </div>`).join('')}
+          </div>
+        </div>`).join('')}
+      </div>`;
+    }
+
+    function updateDimName(type, i, val) {
+      const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+      standards[type][i].name = val;
+      setData('config_standards', standards);
+    }
+
+    function updateScoreDesc(type, di, si, val) {
+      const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+      standards[type][di].scores[si].desc = val;
+      setData('config_standards', standards);
+    }
+
+    function addDimension(type) {
+      const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+      standards[type].push({ name:'新维度', scores:[{score:0,desc:'描述'},{score:1,desc:'描述'},{score:2,desc:'描述'},{score:3,desc:'描述'}] });
+      setData('config_standards', standards);
+      renderStdEditor();
+    }
+
+    function deleteDimension(type, di) {
+      showConfirm('确定删除该维度？', () => {
+        const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+        standards[type].splice(di, 1);
+        setData('config_standards', standards);
+        renderStdEditor();
+      });
+    }
+
+    async function saveStandards() {
+      try {
+        const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+        await saveData('config_standards', standards);
+      } catch(e) {
+        showToast('保存失败：' + e.message, 'error');
+      }
+    }
+
+    // ══════════════════════════════════════
+    // 评测员分配
+    // ══════════════════════════════════════
+    function renderAssign() {
+      const evaluators = getData('config_evaluators');
+      const tasks = getData('config_tasks');
+      const platforms = getData('config_platforms');
+      return `<div>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-gray-800">评测员分配</h2>
+          <button onclick="addEvaluator()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition">+ 新增评测员</button>
+        </div>
+        <div class="space-y-3">
+          ${evaluators.map((ev,i) => `<div class="bg-white rounded-xl shadow p-4">
+            <div class="flex items-start justify-between">
+              <div class="flex-1">
+                <div class="font-semibold text-gray-800">${escapeHtml(ev.name)} <span class="text-xs text-gray-400">(${ev.id})</span></div>
+                <div class="mt-2 text-xs text-gray-600">题目：${ev.taskIds.map(tid => { const t=tasks.find(x=>x.id===tid); return t?t.name:tid; }).join('、')}</div>
+                <div class="mt-1 text-xs text-gray-600">平台：${ev.platforms.join('、')}</div>
+              </div>
+              <button onclick="deleteEvaluator(${i})" class="text-red-600 hover:underline text-xs ml-4">删除</button>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>`;
+    }
+
+    function addEvaluator() {
+      const id = 'eval_' + String(Date.now()).slice(-4);
+      const name = prompt('评测员名称：');
+      if (!name) return;
+      const evaluators = getData('config_evaluators');
+      evaluators.push({ id, name, taskIds:[], platforms:[] });
+      saveData('config_evaluators', evaluators);
+      renderContent();
+    }
+
+    function deleteEvaluator(i) {
+      showConfirm('确定删除该评测员？', async () => {
+        const evaluators = getData('config_evaluators');
+        evaluators.splice(i, 1);
+        await saveData('config_evaluators', evaluators);
+        renderContent();
+      });
+    }
+
+    // ══════════════════════════════════════
+    // 数据管理
+    // ══════════════════════════════════════
+    function renderData() {
+      const evaluators = getData('config_evaluators');
+      const tasks = getData('config_tasks');
+      const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+      const dimMap = {};
+      (standards.gameGen || []).forEach(d => { dimMap[d.name] = true; });
+      (standards.multiRound || []).forEach(d => { dimMap[d.name] = true; });
+      const dims = Object.keys(dimMap);
+
+      // 从 localStorage 加载所有评测数据
+      const allData = [];
+      evaluators.forEach(ev => {
+        const raw = localStorage.getItem('eval_data_' + ev.id);
+        if (raw) {
+          try { allData.push(JSON.parse(raw)); } catch(e) {}
+        }
+      });
+
+      return `<div>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-gray-800">数据管理</h2>
+          <div class="flex gap-2">
+            <button onclick="exportAllData()" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition">导出 CSV</button>
+            <button onclick="refreshData()" class="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 transition">刷新</button>
+          </div>
+        </div>
+        ${allData.length === 0 ? '<div class="text-gray-400 text-sm">暂无评测数据</div>' : `
+        <div class="bg-white rounded-xl shadow overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500 border-b">
+              <th class="py-2 px-3">评测员</th><th class="py-2 px-3">题目</th><th class="py-2 px-3">平台</th>
+              ${dims.map(d => `<th class="py-2 px-3">${d}</th>`).join('')}
+              <th class="py-2 px-3">提交时间</th>
+            </tr></thead>
+            <tbody>
+              ${allData.map(row => {
+                const ev = evaluators.find(e => e.id === row.evaluator);
+                const evName = ev ? ev.name : row.evaluator;
+                return Object.keys(row.data || {}).map(tid => {
+                  const t = tasks.find(x => x.id === tid);
+                  const platforms = row.data[tid] || {};
+                  return Object.keys(platforms).map(p => {
+                    const d = platforms[p] || {};
+                    return `<tr class="border-b hover:bg-gray-50">
+                      <td class="py-2 px-3">${escapeHtml(evName)}</td>
+                      <td class="py-2 px-3">${t?t.name:tid}</td>
+                      <td class="py-2 px-3">${p}</td>
+                      ${dims.map(dim => `<td class="py-2 px-3">${d[dim]!==undefined?d[dim]:'-'}</td>`).join('')}
+                      <td class="py-2 px-3 text-xs text-gray-400">${row.submittedAt?row.submittedAt.slice(0,19).replace('T',' '):''}</td>
+                    </tr>`;
+                  }).join('');
+                }).join('');
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`}
+      </div>`;
+    }
+
+    function refreshData() {
+      renderContent();
+      showToast('已刷新', 'success');
+    }
+
+    function exportAllData() {
+      const evaluators = getData('config_evaluators');
+      const tasks = getData('config_tasks');
+      const standards = getData('config_standards', { gameGen:[], multiRound:[] });
+      const dimMap = {};
+      (standards.gameGen || []).forEach(d => { dimMap[d.name] = true; });
+      (standards.multiRound || []).forEach(d => { dimMap[d.name] = true; });
+      const dims = Object.keys(dimMap);
+
+      let csv = '\uFEFF评测员,题目,平台,' + dims.join(',') + ',游戏链接,备注,提交时间\n';
+      evaluators.forEach(ev => {
+        const raw = localStorage.getItem('eval_data_' + ev.id);
+        if (!raw) return;
+        const row = JSON.parse(raw);
+        const evName = ev.name;
+        Object.keys(row.data || {}).forEach(tid => {
+          const t = tasks.find(x => x.id === tid);
+          const platforms = row.data[tid] || {};
+          Object.keys(platforms).forEach(p => {
+            const d = platforms[p] || {};
+            csv += [evName, t?t.name:tid, p, ...dims.map(dim => d[dim]!==undefined?d[dim]:''), d.gameLink||'', d.remark||'', row.submittedAt?row.submittedAt.slice(0,19).replace('T',' '):''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',') + '\n';
+          });
+        });
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `评测数据_${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('CSV 已导出', 'success');
+    }
+
+    // ══════════════════════════════════════
+    // 初始化
+    // ══════════════════════════════════════
+    (function() {
+      initData().then(() => {
+        renderContent();
+      });
+    })();
+  </script>
+</body>
+</html>

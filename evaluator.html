@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 游戏评测</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
+    .score-btn { width:2.2rem; height:2.2rem; border-radius:9999px; display:inline-flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:600; cursor:pointer; transition:all 0.15s; border:2px solid transparent; }
+    .score-btn.selected { border-color:currentColor; transform:scale(1.15); }
+    .score-btn.unselected { opacity:0.45; }
+    .screenshot-thumb { width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid #e5e7eb; cursor:pointer; }
+    .toast { position:fixed; top:1rem; right:1rem; z-index:9999; padding:0.75rem 1.25rem; border-radius:0.75rem; font-size:0.875rem; font-weight:500; color:white; box-shadow:0 10px 30px rgba(0,0,0,0.2); animation:fadeIn 0.2s ease; }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);} }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+  <div class="max-w-6xl mx-auto p-4 flex gap-4" id="mainLayout">
+    <!-- 左侧：评测表单 -->
+    <div class="flex-1 min-w-0">
+      <div class="bg-white rounded-xl shadow p-5 mb-4">
+        <h1 class="text-lg font-bold text-gray-800 mb-1">AI 游戏生成平台评测</h1>
+        <p class="text-xs text-gray-400" id="evaluatorInfo"></p>
+      </div>
+      <div id="taskList"></div>
+      <div class="mt-4 flex justify-end">
+        <button onclick="submitAll()" class="px-6 py-2.5 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 transition shadow">✅ 最终提交</button>
+      </div>
+    </div>
+
+    <!-- 右侧：评测标准 -->
+    <div class="w-72 flex-shrink-0">
+      <div class="bg-white rounded-xl shadow p-4 sticky top-4">
+        <h3 class="text-sm font-bold text-gray-700 mb-2">📋 评测标准</h3>
+        <div id="stdGameGen" class="mb-3"><div class="text-xs font-semibold text-gray-500 mb-1">一次性生成</div><div id="stdGameGenContent"></div></div>
+        <div id="stdMultiRound"><div class="text-xs font-semibold text-gray-500 mb-1">多轮修改</div><div id="stdMultiRoundContent"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ══════════════════════════════════════
+    // GitHub API 配置（只读，提交用单独接口）
+    // ══════════════════════════════════════
+    const GITHUB_CONFIG = {
+      token: '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',
+      owner: 'waift',
+      repo: 'ai-game-eval',
+      branch: 'main'
+    };
+
+    const GitHubAPI = {
+      async readFile(path) {
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${encodeURIComponent(path)}?ref=${GITHUB_CONFIG.branch}`;
+        const res = await fetch(url, {
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.token}`,
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        });
+        if (!res.ok) { if (res.status === 404) return null; throw new Error(`GitHub ${res.status}`); }
+        const data = await res.json();
+        return JSON.parse(atob(data.content.replace(/\n/g, '')));
+      },
+
+      async writeSubmission(token, content) {
+        const path = `data/submissions/${token}.json`;
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${encodeURIComponent(path)}`;
+        // 检查是否已存在
+        let sha = null;
+        try {
+          const res = await fetch(`${url}?ref=${GITHUB_CONFIG.branch}`, {
+            headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+          });
+          if (res.ok) { const d = await res.json(); sha = d.sha; }
+        } catch(e) {}
+        const body = {
+          message: `Submission from ${token}`,
+          content: btoa(unescape(encodeURIComponent(JSON.stringify(content, null, 2)))),
+          branch: GITHUB_CONFIG.branch
+        };
+        if (sha) body.sha = sha;
+        const res = await fetch(url, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`GitHub ${res.status}`);
+        return await res.json();
+      }
+    };
+
+    // ══════════════════════════════════════
+    // 数据存储（localStorage + GitHub 备份）
+    // ══════════════════════════════════════
+    function getData(key, defaultVal) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return defaultVal !== undefined ? defaultVal : [];
+        return JSON.parse(raw);
+      } catch(e) { return defaultVal !== undefined ? defaultVal : []; }
+    }
+
+    function setData(key, val) {
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+    }
+
+    // ══════════════════════════════════════
+    // 数据配置（从 GitHub 加载，降级 localStorage）
+    // ══════════════════════════════════════
+    let standards = [];
+    let configData = { platforms:[], tasks:[], evaluators:[] };
+    let currentToken = '';
+    let formData = {};
+
+    // 评测标准（硬编码默认，优先从 GitHub 加载）
+    let standardsData = getData('config_standards', {
+      gameGen: [
+        { name:"功能稳定性", scores:[{score:0,desc:"无法运行"},{score:1,desc:"有较多Bug"},{score:2,desc:"有少量Bug"},{score:3,desc:"运行稳定"}] },
+        { name:"视觉品质", scores:[{score:0,desc:"画面严重异常"},{score:1,desc:"画面有明显瑕疵"},{score:2,desc:"画面尚可"},{score:3,desc:"画面精美"}] },
+        { name:"音效品质", scores:[{score:0,desc:"无音效"},{score:1,desc:"音效质量较差"},{score:2,desc:"音效尚可"},{score:3,desc:"音效优秀"}] },
+        { name:"指令还原度", scores:[{score:0,desc:"完全不符"},{score:1,desc:"部分还原"},{score:2,desc:"基本还原"},{score:3,desc:"高度还原"}] },
+        { name:"玩法设计", scores:[{score:0,desc:"玩法缺失"},{score:1,desc:"玩法简单"},{score:2,desc:"玩法尚可"},{score:3,desc:"玩法有趣"}] },
+        { name:"主观评价", scores:[{score:0,desc:"体验很差"},{score:1,desc:"体验一般"},{score:2,desc:"体验尚可"},{score:3,desc:"超出预期"}] }
+      ],
+      multiRound: [
+        { name:"功能稳定性", scores:[{score:0,desc:"修改后无法运行"},{score:1,desc:"修改后Bug增多"},{score:2,desc:"修改后基本稳定"},{score:3,desc:"修改后运行稳定"}] },
+        { name:"视觉品质", scores:[{score:0,desc:"修改后画面变差"},{score:1,desc:"无明显改善"},{score:2,desc:"有所改善"},{score:3,desc:"显著改善"}] },
+        { name:"音效品质", scores:[{score:0,desc:"修改后音效变差"},{score:1,desc:"无明显改善"},{score:2,desc:"有所改善"},{score:3,desc:"显著改善"}] },
+        { name:"指令还原度", scores:[{score:0,desc:"完全不符合新指令"},{score:1,desc:"部分符合"},{score:2,desc:"基本符合"},{score:3,desc:"完全符合"}] },
+        { name:"玩法设计", scores:[{score:0,desc:"修改后玩法变差"},{score:1,desc:"无明显改善"},{score:2,desc:"有所改善"},{score:3,desc:"显著改善"}] },
+        { name:"主观评价", scores:[{score:0,desc:"修改效果很差"},{score:1,desc:"效果一般"},{score:2,desc:"效果尚可"},{score:3,desc:"效果很好"}] }
+      ]
+    });
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ══════════════════════════════════════
+    // 加载配置（从 GitHub）
+    // ══════════════════════════════════════
+    async function loadConfigFromStorage() {
+      const params = new URLSearchParams(window.location.search);
+      currentToken = params.get('token') || '';
+      if (!currentToken) { showToast('缺少 token 参数', 'error'); return; }
+
+      // 从 GitHub 加载配置
+      try {
+        const [platforms, tasks, evaluators, standardsResult] = await Promise.all([
+          GitHubAPI.readFile('data/config/platforms.json'),
+          GitHubAPI.readFile('data/config/tasks.json'),
+          GitHubAPI.readFile('data/config/evaluators.json'),
+          GitHubAPI.readFile('data/config/standards.json')
+        ]);
+        if (platforms) setData('config_platforms', platforms);
+        if (tasks) setData('config_tasks', tasks);
+        if (evaluators) setData('config_evaluators', evaluators);
+        if (standardsResult) {
+          standardsData = standardsResult;
+          setData('config_standards', standardsResult);
+        }
+      } catch(e) {
+        console.warn('GitHub load failed, using localStorage', e);
+      }
+
+      configData.platforms = getData('config_platforms', ["元宝","文心","通义"]);
+      configData.tasks = getData('config_tasks', []);
+      configData.evaluators = getData('config_evaluators', []);
+
+      const ev = configData.evaluators.find(e => e.id === currentToken);
+      document.getElementById('evaluatorInfo').textContent = ev ? `评测员：${ev.name}（${ev.id}）` : `评测员：${currentToken}`;
+
+      // 初始化表单数据
+      (ev ? ev.taskIds : []).forEach(tid => {
+        formData[tid] = {};
+        (ev ? ev.platforms : configData.platforms).forEach(p => {
+          formData[tid][p] = { scores:{}, screenshots:[], gameLink:'', remark:'' };
+        });
+      });
+
+      renderStandards();
+      renderTasks();
+    }
+
+    // ══════════════════════════════════════
+    // 渲染评测标准
+    // ══════════════════════════════════════
+    function renderStdDims(dims) {
+      return (dims || []).map(dim => `
+        <div class="mb-2 text-xs">
+          <div class="font-semibold text-gray-700 mb-0.5">${dim.name}</div>
+          ${(dim.scores || []).map(s => `
+            <div class="flex items-start gap-1 mb-0.5">
+              <span class="inline-block w-4 h-4 rounded-full text-white text-[10px] leading-4 text-center flex-shrink-0 mt-0.5 ${s.score>=2?'bg-green-500':'bg-red-500'}">${s.score}</span>
+              <span class="text-gray-600 leading-tight">${s.desc}</span>
+            </div>
+          `).join('')}
+        </div>
+      `).join('');
+    }
+
+    function renderStandards() {
+      document.getElementById('stdGameGenContent').innerHTML = renderStdDims(standardsData.gameGen);
+      document.getElementById('stdMultiRoundContent').innerHTML = renderStdDims(standardsData.multiRound);
+    }
+
+    // ══════════════════════════════════════
+    // 渲染题目
+    // ══════════════════════════════════════
+    function renderTasks() {
+      const ev = configData.evaluators.find(e => e.id === currentToken);
+      if (!ev) { document.getElementById('taskList').innerHTML = '<div class="text-red-500 text-sm">未找到评测员配置</div>'; return; }
+
+      // 重新从 localStorage 加载最新标准
+      const stored = getData('config_standards', null);
+      if (stored) standardsData = stored;
+
+      let html = '';
+      ev.taskIds.forEach((tid, globalIdx) => {
+        const task = configData.tasks.find(t => t.id === tid);
+        if (!task) return;
+        const taskType = task.type || 'gameGen';
+        html += `<div class="bg-white rounded-xl shadow p-5 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-base font-bold text-gray-800">${globalIdx+1}. ${escapeHtml(task.name)}</h2>
+            <span class="text-xs px-2 py-0.5 rounded ${taskType==='multiRound'?'bg-purple-100 text-purple-700':'bg-blue-100 text-blue-700'}">${taskType==='multiRound'?'多轮修改':'一次性生成'}</span>
+          </div>
+          <div class="text-xs text-gray-500 mb-3 bg-gray-50 p-2 rounded">${escapeHtml(task.prompt)}</div>
+          ${taskType==='multiRound' ? renderMultiRound(tid, task) : renderGameGenCard(tid, task)}
+        </div>`;
+      });
+      document.getElementById('taskList').innerHTML = html;
+    }
+
+    function renderGameGenCard(tid, task) {
+      let html = '';
+      (configData.platforms || []).forEach(p => {
+        html += renderPlatformCard(tid, p, 'gameGen');
+      });
+      return html;
+    }
+
+    function renderMultiRound(tid, task) {
+      let html = '';
+      (configData.platforms || []).forEach(p => {
+        html += renderPlatformCard(tid, p, 'multiRound');
+      });
+      return html;
+    }
+
+    // ══════════════════════════════════════
+    // 平台打分卡片
+    // ══════════════════════════════════════
+    function renderPlatformCard(tid, platform, taskType) {
+      const dims = (taskType === 'multiRound' ? standardsData.multiRound : standardsData.gameGen) || [];
+      const data = (formData[tid] && formData[tid][platform]) || {};
+      return `<div class="border rounded-lg p-4 mb-3 bg-gray-50">
+        <div class="font-semibold text-sm text-gray-700 mb-2">🖥️ ${escapeHtml(platform)}</div>
+        <div class="space-y-2">
+          ${dims.map(dim => {
+            const val = data.scores ? data.scores[dim.name] : undefined;
+            return `<div class="flex items-center gap-2">
+              <span class="text-xs text-gray-600 w-20 flex-shrink-0">${dim.name}</span>
+              <div class="flex gap-1.5">
+                ${dim.scores.map(s => `<button class="score-btn ${val===s.score?'selected':'unselected'}" style="color:${s.score>=2?'#16a34a':'#dc2626'}" onclick="setScore('${tid}','${platform}','${dim.name}',${s.score})">${s.score}</button>`).join('')}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="mt-3 flex items-center gap-2">
+          <input type="text" placeholder="游戏链接" value="${data.gameLink||''}" onchange="setGameLink('${tid}','${platform}',this.value)" class="flex-1 text-xs border rounded px-2 py-1 focus:outline-none focus:border-blue-500" />
+          <button onclick="uploadScreenshot('${tid}','${platform}')" class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition">📷 截图</button>
+          <button onclick="viewScreenshots('${tid}','${platform}')" class="text-xs px-2 py-1 bg-gray-100 rounded hover:bg-gray-200 transition">查看（${(data.screenshots||[]).length}）</button>
+        </div>
+        <div class="mt-2">
+          <input type="text" placeholder="备注（选填）" value="${data.remark||''}" onchange="setRemark('${tid}','${platform}',this.value)" class="w-full text-xs border rounded px-2 py-1 focus:outline-none focus:border-blue-500" />
+        </div>
+      </div>`;
+    }
+
+    // ══════════════════════════════════════
+    // 表单操作
+    // ══════════════════════════════════════
+    function setScore(tid, platform, dim, score) {
+      if (!formData[tid]) formData[tid] = {};
+      if (!formData[tid][platform]) formData[tid][platform] = { scores:{}, screenshots:[], gameLink:'', remark:'' };
+      if (!formData[tid][platform].scores) formData[tid][platform].scores = {};
+      if (formData[tid][platform].scores[dim] === score) {
+        delete formData[tid][platform].scores[dim];
+      } else {
+        formData[tid][platform].scores[dim] = score;
+      }
+      renderTasks();
+    }
+
+    function setGameLink(tid, platform, val) {
+      if (!formData[tid]) formData[tid] = {};
+      if (!formData[tid][platform]) formData[tid][platform] = { scores:{}, screenshots:[], gameLink:'', remark:'' };
+      formData[tid][platform].gameLink = val;
+    }
+
+    function setRemark(tid, platform, val) {
+      if (!formData[tid]) formData[tid] = {};
+      if (!formData[tid][platform]) formData[tid][platform] = { scores:{}, screenshots:[], gameLink:'', remark:'' };
+      formData[tid][platform].remark = val;
+    }
+
+    function uploadScreenshot(tid, platform) {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = function() {
+        const file = input.files[0];
+        if (!file) return;
+        if (!formData[tid]) formData[tid] = {};
+        if (!formData[tid][platform]) formData[tid][platform] = { scores:{}, screenshots:[], gameLink:'', remark:'' };
+        if (formData[tid][platform].screenshots.length >= 5) { showToast('每个平台最多上传5张截图', 'error'); return; }
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+          formData[tid][platform].screenshots.push(ev.target.result);
+          renderTasks();
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+    }
+
+    function viewScreenshots(tid, platform) {
+      const shots = (formData[tid] && formData[tid][platform] && formData[tid][platform].screenshots) || [];
+      if (shots.length === 0) { showToast('暂无截图', 'info'); return; }
+      let html = '<div class="grid grid-cols-3 gap-3">';
+      shots.forEach((src, i) => {
+        html += `<div class="relative"><img src="${src}" class="w-full rounded border" /><button onclick="deleteScreenshot('${tid}','${platform}',${i})" class="absolute top-1 right-1 w-5 h-5 bg-red-500 text-white rounded-full text-xs">✕</button></div>`;
+      });
+      html += '</div>';
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `<div class="modal-box"><h3 class="font-bold mb-3">截图预览</h3>${html}<button onclick="this.closest('.modal-overlay').remove()" class="mt-3 px-4 py-1.5 bg-gray-800 text-white rounded-lg text-sm">关闭</button></div>`;
+      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+    }
+
+    function deleteScreenshot(tid, platform, idx) {
+      formData[tid][platform].screenshots.splice(idx, 1);
+      renderTasks();
+    }
+
+    // ══════════════════════════════════════
+    // 提交
+    // ══════════════════════════════════════
+    function validateSubmission() {
+      const ev = configData.evaluators.find(e => e.id === currentToken);
+      if (!ev) { showToast('评测员配置不存在', 'error'); return false; }
+      let hasError = false;
+      ev.taskIds.forEach(tid => {
+        (ev.platforms || configData.platforms).forEach(p => {
+          const data = (formData[tid] && formData[tid][p]) || {};
+          if (!data.scores || Object.keys(data.scores).length === 0) {
+            const task = configData.tasks.find(t => t.id === tid);
+            showToast(`「${task?task.name:tid} - ${p}」未完成打分`, 'error');
+            hasError = true;
+          }
+        });
+      });
+      return !hasError;
+    }
+
+    async function submitAll() {
+      if (!validateSubmission()) return;
+      const result = {
+        evaluator: currentToken,
+        submittedAt: new Date().toISOString(),
+        data: formData
+      };
+
+      // 保存到 localStorage
+      localStorage.setItem('eval_data_' + currentToken, JSON.stringify(result));
+
+      // 提交到 GitHub
+      try {
+        await GitHubAPI.writeSubmission(currentToken, result);
+        showToast('✅ 评测结果已提交并同步到 GitHub！', 'success');
+      } catch(e) {
+        console.error('GitHub submission failed', e);
+        showToast('已保存到本地，但 GitHub 同步失败：' + e.message, 'error');
+      }
+
+      // 导出 JSON 文件备份
+      const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `评测结果_${currentToken}_${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function hasAnyScore(data, taskType) {
+      const dims = taskType === 'multiRound' ? standardsData.multiRound : standardsData.gameGen;
+      return (dims || []).some(d => data.scores && data.scores[d.name] !== undefined);
+    }
+
+    // ══════════════════════════════════════
+    // Toast 提示
+    // ══════════════════════════════════════
+    function showToast(msg, type) {
+      const colors = { success:'#16a34a', error:'#dc2626', info:'#2563eb' };
+      const div = document.createElement('div');
+      div.className = 'toast';
+      div.style.background = colors[type] || colors.info;
+      div.textContent = msg;
+      document.body.appendChild(div);
+      setTimeout(() => { div.remove(); }, 3000);
+    }
+
+    // ══════════════════════════════════════
+    // 初始化
+    // ══════════════════════════════════════
+    (function() {
+      loadConfigFromStorage();
+    })();
+  </script>
+</body>
+</html>
