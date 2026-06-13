@@ -1,0 +1,5 @@
+[
+  {"id":"eval_01","name":"pengchengluo","taskIds":["case1","case2","mr_case1"],"platforms":["元宝","文心","通义"]},
+  {"id":"eval_02","name":"evaluator02","taskIds":["case1","case3","mr_case1"],"platforms":["元宝","文心","通义"]},
+  {"id":"eval_03","name":"evaluator03","taskIds":["case2","case3","mr_case1"],"platforms":["元宝","文心","通义"]}
+]
