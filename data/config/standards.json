@@ -1,0 +1,18 @@
+{
+  "gameGen": [
+    {"name":"功能稳定性","scores":[{"score":0,"desc":"无法运行"},{"score":1,"desc":"有较多Bug"},{"score":2,"desc":"有少量Bug"},{"score":3,"desc":"运行稳定"}]},
+    {"name":"视觉品质","scores":[{"score":0,"desc":"画面严重异常"},{"score":1,"desc":"画面有明显瑕疵"},{"score":2,"desc":"画面尚可"},{"score":3,"desc":"画面精美"}]},
+    {"name":"音效品质","scores":[{"score":0,"desc":"无音效"},{"score":1,"desc":"音效质量较差"},{"score":2,"desc":"音效尚可"},{"score":3,"desc":"音效优秀"}]},
+    {"name":"指令还原度","scores":[{"score":0,"desc":"完全不符"},{"score":1,"desc":"部分还原"},{"score":2,"desc":"基本还原"},{"score":3,"desc":"高度还原"}]},
+    {"name":"玩法设计","scores":[{"score":0,"desc":"玩法缺失"},{"score":1,"desc":"玩法简单"},{"score":2,"desc":"玩法尚可"},{"score":3,"desc":"玩法有趣"}]},
+    {"name":"主观评价","scores":[{"score":0,"desc":"体验很差"},{"score":1,"desc":"体验一般"},{"score":2,"desc":"体验尚可"},{"score":3,"desc":"超出预期"}]}
+  ],
+  "multiRound": [
+    {"name":"功能稳定性","scores":[{"score":0,"desc":"修改后无法运行"},{"score":1,"desc":"修改后Bug增多"},{"score":2,"desc":"修改后基本稳定"},{"score":3,"desc":"修改后运行稳定"}]},
+    {"name":"视觉品质","scores":[{"score":0,"desc":"修改后画面变差"},{"score":1,"desc":"无明显改善"},{"score":2,"desc":"有所改善"},{"score":3,"desc":"显著改善"}]},
+    {"name":"音效品质","scores":[{"score":0,"desc":"修改后音效变差"},{"score":1,"desc":"无明显改善"},{"score":2,"desc":"有所改善"},{"score":3,"desc":"显著改善"}]},
+    {"name":"指令还原度","scores":[{"score":0,"desc":"完全不符合新指令"},{"score":1,"desc":"部分符合"},{"score":2,"desc":"基本符合"},{"score":3,"desc":"完全符合"}]},
+    {"name":"玩法设计","scores":[{"score":0,"desc":"修改后玩法变差"},{"score":1,"desc":"无明显改善"},{"score":2,"desc":"有所改善"},{"score":3,"desc":"显著改善"}]},
+    {"name":"主观评价","scores":[{"score":0,"desc":"修改效果很差"},{"score":1,"desc":"效果一般"},{"score":2,"desc":"效果尚可"},{"score":3,"desc":"效果很好"}]}
+  ]
+}
