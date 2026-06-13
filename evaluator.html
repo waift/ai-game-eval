@@ -47,7 +47,7 @@
     // GitHub API 配置（只读，提交用单独接口）
     // ══════════════════════════════════════
     const GITHUB_CONFIG = {
-      token: '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',
+      token: localStorage.getItem('ai_eval_gh_token') || '',
       owner: 'waift',
       repo: 'ai-game-eval',
       branch: 'main'
@@ -94,7 +94,7 @@
         } catch(e) {}
         const body = {
           message: `Submission from ${token}`,
-          content: btoa(unescape(encodeURIComponent(JSON.stringify(content, null, 2)))),
+          content: utf8toB64(JSON.stringify(content, null, 2)),
           branch: GITHUB_CONFIG.branch
         };
         if (sha) body.sha = sha;

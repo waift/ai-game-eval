@@ -56,7 +56,7 @@
     // GitHub API 配置
     // ══════════════════════════════════════
     const GITHUB_CONFIG = {
-      token: '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',
+      token: localStorage.getItem('ai_eval_gh_token') || '',
       owner: 'waift',
       repo: 'ai-game-eval',
       branch: 'main',
