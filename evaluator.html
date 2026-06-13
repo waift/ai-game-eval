@@ -53,6 +53,20 @@
       branch: 'main'
     };
 
+    // UTF-8 安全的 Base64 编解码（解决中文乱码）
+    function b64toUtf8(str) {
+      const latin1 = atob(str.replace(/\n/g, ''));
+      const bytes = new Uint8Array(latin1.length);
+      for (let i = 0; i < latin1.length; i++) bytes[i] = latin1.charCodeAt(i);
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+    function utf8toB64(str) {
+      const bytes = new TextEncoder().encode(str);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    }
+
     const GitHubAPI = {
       async readFile(path) {
         const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${encodeURIComponent(path)}?ref=${GITHUB_CONFIG.branch}`;
@@ -64,7 +78,7 @@
         });
         if (!res.ok) { if (res.status === 404) return null; throw new Error(`GitHub ${res.status}`); }
         const data = await res.json();
-        return JSON.parse(atob(data.content.replace(/\n/g, '')));
+        return JSON.parse(b64toUtf8(data.content));
       },
 
       async writeSubmission(token, content) {

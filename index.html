@@ -88,11 +88,26 @@
         return res.json();
       },
 
+      // UTF-8 安全的 Base64 解码（解决中文乱码）
+      b64toUtf8(str) {
+        const latin1 = atob(str.replace(/\n/g, ''));
+        const bytes = new Uint8Array(latin1.length);
+        for (let i = 0; i < latin1.length; i++) bytes[i] = latin1.charCodeAt(i);
+        return new TextDecoder('utf-8').decode(bytes);
+      },
+      // UTF-8 安全的 Base64 编码
+      utf8toB64(str) {
+        const bytes = new TextEncoder().encode(str);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
+      },
+
       async readFile(path) {
         try {
           const data = await this.request(path);
-          const content = atob(data.content.replace(/\n/g, ''));
-          return { content: JSON.parse(content), sha: data.sha };
+          const content = JSON.parse(this.b64toUtf8(data.content));
+          return { content, sha: data.sha };
         } catch(e) {
           if (e.message.includes('404')) return null;
           throw e;
@@ -102,7 +117,7 @@
       async writeFile(path, content, sha) {
         const body = {
           message: `Update ${path}`,
-          content: btoa(unescape(encodeURIComponent(JSON.stringify(content, null, 2)))),
+          content: this.utf8toB64(JSON.stringify(content, null, 2)),
           branch: GITHUB_CONFIG.branch
         };
         if (sha) body.sha = sha;
